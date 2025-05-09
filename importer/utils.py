@@ -50,8 +50,7 @@ def import_excel_file(file_path):
 
     # Normalize column names
     df.columns = [col.strip().lower() for col in df.columns]
-    print("Excel Columns:", df.columns.tolist())
-
+    
     chunk_size = 100
     success_count = 0
     warning_count = 0
@@ -111,7 +110,6 @@ def import_excel_file(file_path):
                             'condition': row.get('condition'),
                         }
 
-                        print('product_data', product_data)  
 
                         product = Product.objects.create(**product_data)
                         product.save()
