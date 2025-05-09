@@ -1,122 +1,46 @@
-# import os
-# import pandas as pd
-# from django.db import transaction
-# from .models import Product, ImportLog, ImportSummary
-# from datetime import datetime
-
-# def validate_row(row):
-#     mandatory_fields = ['id', 'title', 'description', 'link', 'image_link', 'availability', 'price', 'condition', 'brand', 'gtin']
-#     errors = []
-#     warnings = []
-#     for field in mandatory_fields:
-#         if pd.isna(row.get(field)):
-#             errors.append(f"Missing required field: {field}")
-
-#     recommended_fields = ['sale_price', 'item_group_id', 'google_product_category', 'product_type', 'shipping', 'additional_image_links', 'size', 'color', 'material', 'pattern', 'gender', 'model']
-#     for field in recommended_fields:
-#         if pd.isna(row.get(field)):
-#             warnings.append(f"Missing recommended field: {field}")
-
-#     return errors, warnings
- 
-
-# def import_excel_file(file_path):
-#     start_time = datetime.now()
-#     df = pd.read_excel(file_path)
-
-#     chunk_size = 100
-#     success_count = 0
-#     warning_count = 0
-#     error_count = 0
-
-#     for chunk_start in range(0, len(df), chunk_size):
-#         chunk = df.iloc[chunk_start:chunk_start + chunk_size]
-#         logs = []
-
-#         try:
-#             with transaction.atomic():
-#                 for index, row in chunk.iterrows():
-#                     row_number = index + 2  # +2 since Excel headers start at 1
-
-#                     errors, warnings = validate_row(row)
-
-#                     if errors:
-#                         logs.append(ImportLog(row_number=row_number, status='error', message='; '.join(errors)))
-#                         error_count += 1
-#                         continue
-
-#                     try:
-#                         Product.objects.create(**{
-#                             f.name: row.get(f.name)
-#                             for f in Product._meta.fields if f.name != 'id'
-#                         })
-#                         print(f"Inserted row {row_number} into Product")
-#                         logs.append(ImportLog(row_number=row_number, status='success', message='Inserted successfully'))
-#                         success_count += 1
-
-#                         if warnings:
-#                             logs.append(ImportLog(row_number=row_number, status='warning', message='; '.join(warnings)))
-#                             warning_count += 1
-#                     except Exception as e:
-#                         logs.append(ImportLog(row_number=row_number, status='error', message=str(e)))
-#                         error_count += 1
-#         except Exception as e:
-#             # If the entire chunk fails (e.g., DB-level error), log generic error per row
-#             for index, row in chunk.iterrows():
-#                 row_number = index + 2
-#                 logs.append(ImportLog(row_number=row_number, status='error', message='Chunk-level failure: ' + str(e)))
-#                 error_count += 1
-
-#         # Bulk log after each chunk
-#         ImportLog.objects.bulk_create(logs)
-
-#     summary = ImportSummary.objects.create(
-#         file_name=os.path.basename(file_path),
-#         total=len(df),
-#         success=success_count,
-#         warnings=warning_count,
-#         errors=error_count,
-#         duration=datetime.now() - start_time
-#     )
-
-#     return summary
-
-
 import os
+import re
 import pandas as pd
 from django.db import transaction
-from .models import Product, ImportLog, ImportSummary
 from datetime import datetime
+from .models import Product, ImportLog, ImportSummary
 
 MANDATORY_FIELDS = ['id', 'title', 'image_link', 'description', 'link', 'price', 'availability', 'brand', 'gtin']
-RECOMMENDED_FIELDS = ['sale_price', 'shipping', 'item_group_id', 'google_product_category', 'product_type', 'material', 'pattern', 'color', 'product_length', 'product_width', 'product_height', 'product_weight', 'size', 'lifestyle_image_link', 'max_handling_time', 'is_bundle', 'model', 'condition']
-
-
-import re
+RECOMMENDED_FIELDS = ['sale_price', 'shipping', 'item_group_id', 'google_product_category', 'product_type',
+                      'material', 'pattern', 'color', 'product_length', 'product_width', 'product_height',
+                      'product_weight', 'size', 'lifestyle_image_link', 'max_handling_time', 'is_bundle',
+                      'model', 'condition']
 
 def is_valid_number_string(value):
-    if pd.isna(value):
-        return True 
-    return bool(re.match(r'^\s*[\d\.]+', str(value)))
+    try:
+        float(str(value).strip())
+        return True
+    except (ValueError, TypeError):
+        return False
 
-def validate_row(row):
+def validate_row(row, existing_ids=None):
     errors = []
     warnings = []
 
     for field in MANDATORY_FIELDS:
-        if pd.isna(row.get(field)):
+        if pd.isna(row.get(field)) or row.get(field) == "":
             errors.append(f"Missing required field: {field}")
 
+
     for field in RECOMMENDED_FIELDS:
-        if pd.isna(row.get(field)):
+        if pd.isna(row.get(field)) or row.get(field) == "":
             warnings.append(f"Missing recommended field: {field}")
 
-    
     number_string_fields = ['product_length', 'product_width', 'product_height', 'product_weight']
     for field in number_string_fields:
         value = row.get(field)
-        if not is_valid_number_string(value):
+        if value and not is_valid_number_string(value):
             errors.append(f"Field '{field}' expected a number but got '{value}'.")
+
+    if existing_ids is not None:
+        product_id = row.get('id')
+        if product_id in existing_ids:
+            errors.append(f"ID '{product_id}' already exists.")
 
     return errors, warnings
 
@@ -124,9 +48,9 @@ def import_excel_file(file_path):
     start_time = datetime.now()
     df = pd.read_excel(file_path)
 
+    # Normalize column names
     df.columns = [col.strip().lower() for col in df.columns]
-
-    print("Excel Columns:", df.columns.tolist()) 
+    print("Excel Columns:", df.columns.tolist())
 
     chunk_size = 100
     success_count = 0
@@ -137,13 +61,17 @@ def import_excel_file(file_path):
         chunk = df.iloc[chunk_start:chunk_start + chunk_size]
         logs = []
 
+        # Preload existing IDs in DB for this chunk
+        chunk_ids = chunk['id'].dropna().unique()
+        existing_ids = set(Product.objects.filter(id__in=chunk_ids).values_list('id', flat=True))
+
         try:
             with transaction.atomic():
                 for index, row in chunk.iterrows():
                     row = row.to_dict()
-                    row_number = index + 2
+                    row_number = index + 2 
 
-                    errors, warnings = validate_row(row)
+                    errors, warnings = validate_row(row, existing_ids)
 
                     if errors:
                         logs.append(ImportLog(row_number=row_number, status='error', message='; '.join(errors)))
@@ -182,11 +110,10 @@ def import_excel_file(file_path):
                             'model': row.get('model'),
                             'condition': row.get('condition'),
                         }
+
                         print('product_data', product_data)  
 
-                        # Create and save the product instance
                         product = Product.objects.create(**product_data)
-                        print('product', product)  
                         product.save()
                         logs.append(ImportLog(row_number=row_number, status='success', message='Inserted successfully'))
                         success_count += 1
@@ -215,4 +142,3 @@ def import_excel_file(file_path):
     )
 
     return summary
-

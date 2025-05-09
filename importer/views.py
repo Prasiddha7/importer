@@ -38,18 +38,23 @@ class ImportExcelView(APIView):
 
         return Response({"message": "Import completed", "summary_id": summary.id})
 
-    
 class ImportSummaryView(APIView):
-    def get(self, request):
-        latest_summary = ImportSummary.objects.latest('created_at') 
-        return Response({
-            'file_name': latest_summary.file_name,
-            'total': latest_summary.total,
-            'success': latest_summary.success,
-            'warnings': latest_summary.warnings,
-            'errors': latest_summary.errors,
-            'duration': str(latest_summary.duration)
-        })
+    def get(self, request, summary_id):
+        try:
+            summary = ImportSummary.objects.get(id=summary_id)
+            return Response({
+                'file_name': summary.file_name,
+                'total': summary.total,
+                'success': summary.success,
+                'warnings': summary.warnings,
+                'errors': summary.errors,
+                'duration': str(summary.duration),
+                'created_at': summary.created_at.strftime('%Y-%m-%d %H:%M:%S')
+            }, status=status.HTTP_200_OK)
+        except ImportSummary.DoesNotExist:
+            return Response({
+                'error': f'ImportSummary with id {summary_id} not found.'
+            }, status=status.HTTP_404_NOT_FOUND)
     
 
 class ImportLogListView(generics.ListAPIView):
