@@ -1,4 +1,4 @@
-Django Excel Product File Importer
+#Django Excel Product File Importer
 A Django application to import product data from Excel files in chunks with validation, logging, and analytics summary tracking.
 
 #Installation
@@ -19,7 +19,6 @@ python manage.py migrate
 python manage.py runserver
 
 #API ENDPOINTS
-Action	URL	Method
 Upload Excel	http://127.0.0.1:8000//api/upload/	POST
 View Summary	http://127.0.0.1:8000/api/summary/1/	GET
 View Logs	http://127.0.0.1:8000/api/import-logs/	GET
